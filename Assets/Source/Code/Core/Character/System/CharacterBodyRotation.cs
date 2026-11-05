@@ -81,30 +81,26 @@ namespace SurgeEngine.Source.Code.Core.Character.System
             }
         }
 
-        private Vector3 CalculateTargetDirection(Vector3 inputDir, Vector3 currentVelocity,
+        private Vector3 CalculateTargetDirection(Vector3 inputDir, Vector3 currentVelocity, 
             float currentSpeed, Vector3 normal)
         {
-            Vector3 up = normal.sqrMagnitude > 0.0001f ? normal.normalized : Vector3.up;
-            Vector3 inputTangent = Vector3.ProjectOnPlane(inputDir, up);
-            Vector3 velocityTangent = Vector3.ProjectOnPlane(currentVelocity, up);
+            Vector3 targetDir = Vector3.ProjectOnPlane(inputDir.normalized, Vector3.up);
 
-            Vector3 targetDir = inputTangent;
-            if (currentSpeed > SpeedThreshold && velocityTangent.sqrMagnitude > 0.0001f)
+            if (currentSpeed > SpeedThreshold)
             {
-                float blend = CalculateVelocityBlendFactor(currentSpeed);
-                targetDir = Vector3.Slerp(inputTangent.normalized, velocityTangent.normalized, blend);
+                var velDir = Vector3.ProjectOnPlane(currentVelocity.normalized, normal);
+                float t = CalculateVelocityBlendFactor(currentSpeed) * 8f;
+                targetDir = Vector3.Slerp(inputDir.normalized, velDir, t).normalized;
             }
 
-            if (targetDir.sqrMagnitude < 0.0001f)
-                targetDir = Vector3.ProjectOnPlane(_character.Kinematics.Rigidbody.transform.forward, up);
-
-            return targetDir.sqrMagnitude > 0.0001f ? targetDir.normalized : Vector3.zero;
+            return targetDir;
         }
 
         private float CalculateVelocityBlendFactor(float currentSpeed)
         {
-            float speedRange = Mathf.Max(0.01f, _character.Config.topSpeed - SpeedThreshold);
-            return Mathf.Clamp01((currentSpeed - SpeedThreshold) / speedRange);
+            float speedRange = _character.Config.topSpeed - SpeedThreshold;
+            float t = Mathf.Clamp01((currentSpeed - SpeedThreshold) / speedRange);
+            return t;
         }
 
         private float CalculateRotationSpeed(float angleDelta, float currentSpeed)
