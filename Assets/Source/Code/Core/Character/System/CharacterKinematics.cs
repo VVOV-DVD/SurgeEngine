@@ -94,9 +94,6 @@ namespace SurgeEngine.Source.Code.Core.Character.System
 
         private PhysicsConfig _config;
         private Vector3 _normalVelocity;
-        private Vector3 _lastSlopeNormal;
-        private Vector3 _lastSlopePosition;
-        private bool _hasSlopeSample;
 
         protected virtual void Awake()
         {
@@ -400,44 +397,24 @@ namespace SurgeEngine.Source.Code.Core.Character.System
 
         public void SlopePhysics()
         {
-            Vector3 normal = Normal.sqrMagnitude > 0.0001f ? Normal.normalized : Vector3.up;
-            float angle = Vector3.Angle(normal, Vector3.up);
-
-            if (Speed < _config.slopeMinSpeed && angle >= _config.slopeDeslopeAngle)
+            if (Speed < _config.slopeMinSpeed && Angle >= _config.slopeDeslopeAngle)
             {
-                Rigidbody.AddForce(normal * _config.slopeDeslopeForce, ForceMode.Impulse);
+                Rigidbody.AddForce(Normal * _config.slopeDeslopeForce, ForceMode.Impulse);
                 Character.StateMachine.SetState<FStateAir>();
                 SetDetachTime(_config.slopeInactiveDuration);
-                _hasSlopeSample = false;
-                return;
             }
 
-            // Let Unity gravity resolve along the slope. Extra uphill force was double-counting gravity
-            // and drained boost momentum on inclines.
-            Vector3 tangentVelocity = Vector3.ProjectOnPlane(Rigidbody.linearVelocity, normal);
-            Vector3 position = Rigidbody.position;
-            float curvature = 0f;
-
-            if (_hasSlopeSample)
+            if (Angle > _config.slopeMinAngle && Speed > _config.slopeMinForceSpeed)
             {
-                float distance = Vector3.ProjectOnPlane(position - _lastSlopePosition, normal).magnitude;
-                if (distance > 0.01f)
-                    curvature = Vector3.Angle(_lastSlopeNormal, normal) * Mathf.Deg2Rad / distance;
+                bool uphill = Vector3.Dot(Rigidbody.linearVelocity.normalized, Vector3.down) < 0;
+                float forceMag = uphill ? _config.slopeUphillForce : _config.slopeDownhillForce;
+                Vector3 slopeDir = SurgeMath.GetMovementDirectionProjectedOnPlane(Vector3.down, Normal, Vector3.up);
+                Rigidbody.AddForce(slopeDir * (forceMag * Time.fixedDeltaTime), ForceMode.Impulse);
             }
 
-            _lastSlopeNormal = normal;
-            _lastSlopePosition = position;
-            _hasSlopeSample = true;
-
-            // On curved track, provide the inward acceleration required to follow the local radius.
-            // The force only pushes into the playable side; when speed is too low, the character can detach.
-            if (curvature > 0.002f && tangentVelocity.sqrMagnitude > 0.01f)
-            {
-                float centripetalAcceleration = tangentVelocity.sqrMagnitude * curvature;
-                float gravityAlongNormal = Vector3.Dot(Physics.gravity, normal);
-                float adhesionAcceleration = Mathf.Max(0f, centripetalAcceleration - gravityAlongNormal);
-                Rigidbody.AddForce(normal * adhesionAcceleration, ForceMode.Acceleration);
-            }
+            float rDot = Vector3.Dot(Vector3.up, Character.transform.right);
+            if (Mathf.Abs(rDot) > 0.1f && Mathf.Approximately(Angle, 90f))
+                Rigidbody.linearVelocity += Vector3.down * (4f * Time.fixedDeltaTime);
         }
 
         public bool CheckForPredictedGround(float deltaTime, float distance, int steps)
@@ -537,70 +514,6 @@ namespace SurgeEngine.Source.Code.Core.Character.System
             return hit;
         }
         
-        /// <summary>
-        /// Uses a small sphere sweep under the character and ahead along the tangent velocity.
-        /// A predicted hit keeps the ground state alive for the next fixed step without snapping
-        /// the character forward to the look-ahead contact point.
-        /// </summary>
-        public bool CheckForGroundAhead(out RaycastHit result, out bool isPredicted, float castDistance = 0f)
-        {
-            result = default;
-            isPredicted = false;
-            if (castDistance <= 0f) castDistance = _config.castDistance;
-
-            Vector3 up = Normal.sqrMagnitude > 0.0001f ? Normal.normalized : Vector3.up;
-            Vector3 tangent = Vector3.ProjectOnPlane(Velocity, up);
-            if (tangent.sqrMagnitude < 0.0001f)
-                tangent = Vector3.ProjectOnPlane(Rigidbody.transform.forward, up);
-            if (tangent.sqrMagnitude < 0.0001f)
-                return false;
-
-            Vector3 forward = tangent.normalized;
-            Vector3 side = Vector3.Cross(up, forward).normalized;
-            float speed = tangent.magnitude;
-            float lead = Mathf.Clamp(speed * Time.fixedDeltaTime * 2f, 0.35f, 2.5f);
-            float radius = Mathf.Clamp(_config.jumpCollisionRadius * 0.7f, 0.2f, 0.45f);
-            Vector3 origin = Rigidbody.position + up * 0.2f;
-
-            // First widen the support check directly beneath the current body.
-            if (Physics.SphereCast(origin, radius, -up, out result, castDistance + 0.25f,
-                    _config.castLayer, QueryTriggerInteraction.Ignore))
-            {
-                isPredicted = false;
-                return true;
-            }
-
-            // Then sweep three probes ahead across the character's support width.
-            float bestDistance = float.PositiveInfinity;
-            bool found = false;
-            for (int i = -1; i <= 1; i++)
-            {
-                Vector3 aheadOrigin = origin + forward * lead + side * (i * radius);
-                if (Physics.SphereCast(aheadOrigin, radius, -up, out RaycastHit hit,
-                        castDistance + 0.5f, _config.castLayer, QueryTriggerInteraction.Ignore)
-                    && Vector3.Angle(up, hit.normal) <= 120f
-                    && hit.distance < bestDistance)
-                {
-                    result = hit;
-                    bestDistance = hit.distance;
-                    found = true;
-                }
-            }
-
-            // A forward sweep catches the rising face of a loop before a downward-only probe can.
-            if (Physics.SphereCast(origin, radius, forward, out RaycastHit forwardHit,
-                    lead + radius, _config.castLayer, QueryTriggerInteraction.Ignore)
-                && Vector3.Angle(up, forwardHit.normal) <= 120f
-                && forwardHit.distance < bestDistance)
-            {
-                result = forwardHit;
-                found = true;
-            }
-
-            isPredicted = found;
-            return found;
-        }
-
         public bool CheckForGroundWithDirection(out RaycastHit result, Vector3 direction,
             float castDistance = 0)
         {
@@ -669,19 +582,13 @@ namespace SurgeEngine.Source.Code.Core.Character.System
 
         public void RotateSnapNormal(Vector3 targetNormal)
         {
-            Vector3 target = targetNormal.sqrMagnitude > 0.0001f ? targetNormal.normalized : Vector3.up;
-            Vector3 current = Normal.sqrMagnitude > 0.0001f ? Normal.normalized : Vector3.up;
-
             if (Speed > normalSpeedThreshold)
             {
-                float speedScale = Mathf.Clamp(Speed / Mathf.Max(normalSpeedThreshold, 0.01f), 1f, 4f);
-                float alpha = 1f - Mathf.Exp(-normalLerpSpeed * speedScale * Time.fixedDeltaTime);
-                Normal = Vector3.Slerp(current, target, alpha).normalized;
+                Normal = Vector3.SmoothDamp(Normal, targetNormal, ref _normalVelocity, 0.02f, Speed / 2);
             }
             else
             {
-                float alpha = 1f - Mathf.Exp(-normalLerpSpeed * Time.fixedDeltaTime);
-                Normal = Vector3.Slerp(current, Vector3.up, alpha).normalized;
+                Normal = Vector3.SmoothDamp(Normal, Vector3.up, ref _normalVelocity, 0.1f);
             }
         }
         
