@@ -24,6 +24,8 @@ namespace SurgeEngine.Source.Code.Core.Character.States.Characters.Sonic.SubStat
         }
 
         public float MaxBoostEnergy => _config.BoostCapacity;
+        public float MaxBoostSpeed => Mathf.Max(_config.MaxBoostSpeed,
+            Character.Config.topSpeed * _config.TopSpeedMultiplier);
 
         public bool CanAirBoost;
 
