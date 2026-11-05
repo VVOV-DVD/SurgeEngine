@@ -1,5 +1,4 @@
 ﻿using SurgeEngine.Source.Code.Core.Character.States.BaseStates;
-using SurgeEngine.Source.Code.Core.Character.States.Characters.Sonic.SubStates;
 using SurgeEngine.Source.Code.Core.Character.System;
 using SurgeEngine.Source.Code.Gameplay.CommonObjects;
 using SurgeEngine.Source.Code.Infrastructure.Config;
@@ -52,53 +51,40 @@ namespace SurgeEngine.Source.Code.Core.Character.States
             PhysicsConfig config = Character.Config;
             float distance = config.EvaluateCastDistance(Kinematics.Speed / config.topSpeed);
             bool ground = Kinematics.CheckForGround(out RaycastHit data, castDistance: distance);
-            bool aheadSupport = false;
-            if (!ground && Kinematics.Speed > Mathf.Max(config.slopeMinSpeed, 8f))
-                ground = Kinematics.CheckForGroundAhead(out data, out aheadSupport, distance);
 
-            bool isWater = false;
-            if (ground && data.transform != null)
+            bool isWater = data.transform.IsWater(out var surface);
+            if (isWater)
             {
-                isWater = data.transform.IsWater(out var surface);
-                if (isWater)
+                surface.Attach(Rigidbody.position, Character);
+                
+                if (Kinematics.HorizontalVelocity.magnitude < surface.MinimumSpeed)
                 {
-                    surface.Attach(Rigidbody.position, Character);
-
-                    if (Kinematics.HorizontalVelocity.magnitude < surface.MinimumSpeed)
-                    {
-                        StateMachine.SetState<FStateAir>();
-                        return;
-                    }
+                    StateMachine.SetState<FStateAir>();
+                    return;
                 }
             }
             
-            bool predictedGround = aheadSupport || Kinematics.CheckForPredictedGround(dt, distance, 8);
+            bool predictedGround = Kinematics.CheckForPredictedGround(dt, distance, 8);
             if (ground)
             {
                 Kinematics.Point = data.point;
-                float normalDelta = Vector3.Angle(Kinematics.Normal, data.normal);
-                bool canFollowSurface = predictedGround
-                    || (Kinematics.Speed >= config.slopeMinSpeed && normalDelta <= 120f);
-
-                if (canFollowSurface) Kinematics.RotateSnapNormal(data.normal);
+                if (predictedGround) Kinematics.RotateSnapNormal(data.normal);
                 else
                 {
                     Kinematics.Normal = Vector3.up;
                     StateMachine.SetState<FStateSlip>();
                 }
-
-                float maxGroundSpeed = config.maxSpeed;
-                if (Character.StateMachine.GetState(out FBoost boost) && boost.Active)
-                    maxGroundSpeed = Mathf.Max(maxGroundSpeed, boost.MaxBoostSpeed);
-                Kinematics.ClampVelocityToMax(maxGroundSpeed);
-
+                
+                Kinematics.ClampVelocityToMax();
+                
                 Kinematics.BasePhysics(Kinematics.Normal);
-                if (!aheadSupport)
+                if (!isWater || predictedGround)
                 {
-                    if (!isWater || predictedGround)
-                        Kinematics.Snap(Kinematics.Point, Kinematics.Normal);
-                    else
-                        Kinematics.SnapOnWater(data.point);
+                    Kinematics.Snap(Kinematics.Point, Kinematics.Normal);
+                }
+                else
+                {
+                    Kinematics.SnapOnWater(data.point);
                 }
 
                 Kinematics.ProjectOnNormal();
